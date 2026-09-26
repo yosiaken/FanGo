@@ -115,3 +115,20 @@ test('金額算式解析', async () => {
   assert.equal(parseAmount('1/0'), null);
   assert.equal(parseAmount('3.'), 3);
 });
+
+test('單筆費用可自訂權重與份數', () => {
+  const a = base();
+  const e = { id: 'e', name: '兒童餐', category: 'meal', payments: [pay('A', 1200)],
+    split: { mode: 'weighted', participants: ['A', 'B'], weights: { adult: 1, child: 1 } } };
+  // A 2大1小=3、B 2大2小=4
+  let { shares } = expenseShares(e, a);
+  assert.ok(Math.abs(shares.A - 1200 * 3 / 7) < 1e-9);
+  // 直接指定 B 只算 2 份，優先於權重
+  e.split.shares = { B: 2 };
+  ({ shares } = expenseShares(e, a));
+  assert.equal(shares.A, 720);
+  assert.equal(shares.B, 480);
+  // 份數全為 0 → 錯誤
+  e.split.shares = { A: 0, B: 0 };
+  assert.match(expenseShares(e, a).error, /為 0/);
+});

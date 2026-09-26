@@ -59,7 +59,7 @@ export function normalizeActivity(a) {
         split:
           e.split?.mode === 'fixed'
             ? { mode: 'fixed', amounts: { ...(e.split.amounts ?? {}) } }
-            : { mode: 'weighted', participants: Array.isArray(e.split?.participants) ? e.split.participants.map(String) : families.map((f) => f.id) },
+            : normalizeWeighted(e.split, families),
       }))
     : [];
   return {
@@ -74,6 +74,23 @@ export function normalizeActivity(a) {
     expenses,
     updatedAt: Number(a.updatedAt) || Date.now(),
   };
+}
+
+function normalizeWeighted(split, families) {
+  const out = {
+    mode: 'weighted',
+    participants: Array.isArray(split?.participants) ? split.participants.map(String) : families.map((f) => f.id),
+  };
+  const w = split?.weights;
+  if (w && Number.isFinite(Number(w.adult)) && Number.isFinite(Number(w.child))) {
+    out.weights = { adult: Number(w.adult), child: Number(w.child) };
+  }
+  if (split?.shares && typeof split.shares === 'object') {
+    const shares = {};
+    for (const [id, v] of Object.entries(split.shares)) if (Number.isFinite(Number(v))) shares[String(id)] = Math.max(0, Number(v));
+    if (Object.keys(shares).length) out.shares = shares;
+  }
+  return out;
 }
 
 // ---- 分享連結：JSON → deflate → base64url，放在網址 # 後面（不會傳到伺服器） ----

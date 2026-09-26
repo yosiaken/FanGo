@@ -1,7 +1,7 @@
 // 分好帳 FanGo — 介面
 import {
   CATEGORIES, CATEGORY_LABEL, computeSettlement, expenseShares, expenseTotal,
-  familyWeight, fmt, fmtSigned, num, parseAmount, roundYuan,
+  familyWeight, fmt, fmtSigned, hasCustomWeights, num, parseAmount, roundYuan, splitFamilyWeight,
 } from './calc.js';
 import { minimizeTransfers } from './settle.js';
 import { buildReport } from './report.js';
@@ -222,8 +222,9 @@ function splitSummary(a, e) {
     return `指定金額（${n} 家）`;
   }
   const ids = e.split.participants.filter((id) => a.families.some((f) => f.id === id));
-  if (ids.length === a.families.length) return '按權重・全部家庭';
-  return `按權重・只分 ${ids.map((id) => famName(a, id)).join('、') || '（無）'}`;
+  const custom = hasCustomWeights(e.split) ? '・自訂權重' : '';
+  if (ids.length === a.families.length) return `按權重・全部家庭${custom}`;
+  return `按權重・只分 ${ids.map((id) => famName(a, id)).join('、') || '（無）'}${custom}`;
 }
 
 function expenseCardHTML(a, e) {
@@ -262,6 +263,9 @@ function openExpense(id) {
       participants: e.split.mode === 'weighted' ? [...e.split.participants] : a.families.map((f) => f.id),
       amounts: e.split.mode === 'fixed' ? Object.fromEntries(Object.entries(e.split.amounts).map(([k, v]) => [k, String(v)])) : {},
       modeTouched: true,
+      custom: hasCustomWeights(e.split),
+      cw: weightStrings(e.split.weights ?? a.weights),
+      cshares: Object.fromEntries(Object.entries(e.split.shares ?? {}).map(([k, v]) => [k, String(v)])),
     };
   } else {
     draft = {
@@ -273,12 +277,48 @@ function openExpense(id) {
       participants: a.families.map((f) => f.id),
       amounts: {},
       modeTouched: false,
+      custom: false,
+      cw: weightStrings(a.weights),
+      cshares: {},
     };
   }
   renderDialog();
   const dlg = $('#expense-dialog');
   if (!dlg.open) dlg.showModal();
   if (!e) setTimeout(() => $('[data-d="name"]', dlg)?.focus(), 50);
+}
+
+const weightStrings = (w) => ({ adult: String(w.adult), child: String(w.child) });
+
+/** 解析份數／權重輸入：空白回傳 null，無效或負數回傳 NaN */
+function parseWeight(v) {
+  if (String(v ?? '').trim() === '') return null;
+  const n = parseAmount(v);
+  return n === null || n < 0 ? NaN : n;
+}
+
+/**
+ * 由草稿組出「按權重均分」的 split（自訂權重與份數只在有效時才放入）。
+ * @returns {{split: import('./calc.js').Split, error: string|null}}
+ */
+function draftWeightedSplit(a) {
+  const split = { mode: 'weighted', participants: a.families.map((f) => f.id).filter((id) => draft.participants.includes(id)) };
+  if (!draft.custom) return { split, error: null };
+  let error = null;
+  const ad = parseWeight(draft.cw.adult);
+  const ch = parseWeight(draft.cw.child);
+  if (Number.isNaN(ad) || Number.isNaN(ch) || ad === null || ch === null) error = '此筆的大人／小孩權重需為 0 以上的數字';
+  else if (ad !== a.weights.adult || ch !== a.weights.child) split.weights = { adult: ad, child: ch };
+  const shares = {};
+  for (const [id, raw] of Object.entries(draft.cshares)) {
+    if (!split.participants.includes(id)) continue;
+    const v = parseWeight(raw);
+    if (v === null) continue;
+    if (Number.isNaN(v)) error ??= `${famName(a, id)} 的份數需為 0 以上的數字`;
+    else shares[id] = v;
+  }
+  if (Object.keys(shares).length) split.shares = shares;
+  return { split, error };
 }
 
 function draftTotal() {
@@ -346,13 +386,22 @@ function splitAreaHTML(a) {
         <button type="button" class="btn small ghost" data-d-action="all">全選</button>
         <button type="button" class="btn small ghost" data-d-action="none">全不選</button>
       </div>
+      <label class="check custom-toggle"><input type="checkbox" data-d="custom" ${draft.custom ? 'checked' : ''} /> 這筆用不同的權重或份數</label>
+      ${draft.custom ? `
+      <div class="custom-w">
+        <label>大人<input type="text" inputmode="decimal" class="num" data-d="cw-adult" value="${esc(draft.cw.adult)}" autocomplete="off" /></label>
+        <label>小孩<input type="text" inputmode="decimal" class="num" data-d="cw-child" value="${esc(draft.cw.child)}" autocomplete="off" /></label>
+        <button type="button" class="btn small ghost" data-d-action="reset-w">恢復預設</button>
+      </div>
+      <p class="hint" style="margin:0 0 6px">也可以直接修改下方每家的份數（例如這餐某家只去 2 人）。</p>` : ''}
       <div class="split-list">
         ${a.families.map((f) => `
           <div class="split-row">
             <label>
               <input type="checkbox" data-d="part" data-id="${f.id}" ${draft.participants.includes(f.id) ? 'checked' : ''} />
-              <span class="who">${esc(f.name || '未命名')}<small>${people(f)} · ${shareStr(familyWeight(f, a.weights))} 份</small></span>
+              <span class="who">${esc(f.name || '未命名')}<small>${people(f)}${draft.custom ? '' : ` · ${shareStr(familyWeight(f, a.weights))} 份`}</small></span>
             </label>
+            ${draft.custom ? `<span class="share-in"><input type="text" inputmode="decimal" class="num" data-d="cshare" data-id="${f.id}" value="${esc(draft.cshares[f.id] ?? '')}" aria-label="${esc(f.name)} 份數" autocomplete="off" /><span>份</span></span>` : ''}
             <span class="val num" data-preview="${f.id}"></span>
           </div>`).join('')}
       </div>
@@ -377,6 +426,7 @@ function splitAreaHTML(a) {
 
 /** 依草稿內容更新即時預覽（不重畫輸入框，避免游標跳掉） */
 function refreshDialogDerived() {
+  if (!draft) return;
   const a = cur();
   const total = draftTotal();
   const t = $('#d-total');
@@ -389,15 +439,31 @@ function refreshDialogDerived() {
 
   const note = $('#split-note');
   if (draft.mode === 'weighted') {
+    const { split, error } = draftWeightedSplit(a);
+    const w = (f) => splitFamilyWeight(f, split, a);
     const members = a.families.filter((f) => draft.participants.includes(f.id));
-    const tw = members.reduce((s, f) => s + familyWeight(f, a.weights), 0);
+    const tw = members.reduce((s, f) => s + w(f), 0);
     for (const f of a.families) {
       const el = $(`[data-preview="${f.id}"]`);
-      if (!el) continue;
-      el.textContent = draft.participants.includes(f.id) && tw > 0 ? money((total * familyWeight(f, a.weights)) / tw) : '—';
+      if (el) el.textContent = draft.participants.includes(f.id) && tw > 0 ? money((total * w(f)) / tw) : '—';
+      // 份數欄：沒有手動覆寫的顯示依權重算出的預設份數
+      const inp = $(`[data-d="cshare"][data-id="${f.id}"]`);
+      if (inp) {
+        const overridden = parseWeight(draft.cshares[f.id]) !== null;
+        inp.classList.toggle('overridden', overridden);
+        inp.classList.toggle('invalid', Number.isNaN(parseWeight(draft.cshares[f.id])));
+        inp.disabled = !draft.participants.includes(f.id);
+        if (!overridden && document.activeElement !== inp) inp.value = shareStr(familyWeight(f, split.weights ?? a.weights));
+      }
+    }
+    for (const k of ['adult', 'child']) {
+      const inp = $(`[data-d="cw-${k}"]`);
+      if (inp) inp.classList.toggle('invalid', !(parseWeight(draft.cw[k]) >= 0));
     }
     if (note) {
-      note.textContent = !members.length
+      note.textContent = error
+        ? `⚠️ ${error}`
+        : !members.length
         ? '⚠️ 至少要勾選一家'
         : tw > 0
           ? `${members.length} 家共 ${shareStr(tw)} 份，每份約 ${money(total / tw)}（預覽金額已四捨五入）`
@@ -424,6 +490,22 @@ function onDialogInput(ev) {
   else if (k === 'pay-amt') draft.payments[i].amount = el.value;
   else if (k === 'pay-note') draft.payments[i].note = el.value;
   else if (k === 'fixed') draft.amounts[el.dataset.id] = el.value;
+  else if (k === 'cw-adult') draft.cw.adult = el.value;
+  else if (k === 'cw-child') draft.cw.child = el.value;
+  else if (k === 'cshare') {
+    const f = cur().families.find((x) => x.id === el.dataset.id);
+    // 改回與預設相同的份數就視為沒有覆寫
+    const w = parseWeight(draft.cw.adult) >= 0 && parseWeight(draft.cw.child) >= 0
+      ? { adult: parseWeight(draft.cw.adult), child: parseWeight(draft.cw.child) } : cur().weights;
+    if (el.value.trim() === '' || (f && parseWeight(el.value) === familyWeight(f, w))) delete draft.cshares[el.dataset.id];
+    else draft.cshares[el.dataset.id] = el.value;
+  } else if (k === 'custom') {
+    if (ev.type !== 'change') return;
+    draft.custom = el.checked;
+    draft.cw = weightStrings(cur().weights);
+    draft.cshares = {};
+    renderDialog();
+  }
   else if (k === 'part') {
     const id = el.dataset.id;
     draft.participants = el.checked ? [...new Set([...draft.participants, id])] : draft.participants.filter((x) => x !== id);
@@ -445,6 +527,7 @@ function evaluateInPlace(el) {
 
 /** 離開金額欄位時，把算式換成計算結果並收起運算鍵 */
 function onDialogBlur(ev) {
+  if (ev.target.dataset?.d === 'cshare') return void setTimeout(refreshDialogDerived);
   if (!isMoneyInput(ev.target)) return;
   evaluateInPlace(ev.target);
   $('#calc-bar')?.remove();
@@ -522,6 +605,10 @@ function onDialogClick(ev) {
     case 'all':
       draft.participants = a.families.map((f) => f.id);
       break;
+    case 'reset-w':
+      draft.cw = weightStrings(a.weights);
+      draft.cshares = {};
+      break;
     case 'none':
       draft.participants = [];
       break;
@@ -580,9 +667,10 @@ function onDialogSubmit(ev) {
 
   let split;
   if (draft.mode === 'weighted') {
-    const participants = a.families.map((f) => f.id).filter((id) => draft.participants.includes(id));
-    if (!participants.length) return toast('請至少勾選一家分攤');
-    split = { mode: 'weighted', participants };
+    const built = draftWeightedSplit(a);
+    if (!built.split.participants.length) return toast('請至少勾選一家分攤');
+    if (built.error) return toast(built.error);
+    split = built.split;
   } else {
     const amounts = {};
     for (const [id, raw] of Object.entries(draft.amounts)) {

@@ -281,3 +281,14 @@ table.detail tfoot td { font-weight: 800; border-bottom: 0; }
 .calc-bar button:active { background: var(--accent-soft); }
 .calc-bar button[data-calc="="] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .split-list .calc-bar { margin-top: 2px; }
+
+/* 單筆費用自訂權重 */
+.custom-toggle { margin: 4px 0 10px; }
+.custom-w { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; padding: 10px; background: var(--surface-2); border-radius: 10px; }
+.custom-w label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); }
+.custom-w input { width: 64px; min-height: 38px; padding: 6px 8px; text-align: center; }
+.custom-w .btn { margin-left: auto; }
+.share-in { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 13px; color: var(--muted); }
+.share-in input { width: 56px; min-height: 38px; padding: 6px; text-align: center; }
+.share-in input.overridden { border-color: var(--accent); background: var(--accent-soft); color: var(--text); font-weight: 700; }
+.share-in input:disabled { opacity: 0.4; }

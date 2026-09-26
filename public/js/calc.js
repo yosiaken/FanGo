@@ -5,7 +5,8 @@
  * @typedef {{id:string, name:string, adults:number, children:number}} Family
  * @typedef {{adult:number, child:number}} Weights
  * @typedef {{familyId:string, amount:number, note?:string}} Payment
- * @typedef {{mode:'weighted', participants:string[]} | {mode:'fixed', amounts:Record<string, number>}} Split
+ * @typedef {{mode:'weighted', participants:string[], weights?:Weights, shares?:Record<string, number>} | {mode:'fixed', amounts:Record<string, number>}} Split
+ *   weighted 可選：weights 覆寫這筆費用的大人／小孩權重；shares 直接指定某家的份數（優先於 weights）
  * @typedef {{id:string, name:string, category:Category, payments:Payment[], split:Split}} Expense
  * @typedef {{id:string, name:string, families:Family[], weights:Weights, roundingFamilyId:string|null, expenses:Expense[], updatedAt?:number}} Activity
  */
@@ -36,6 +37,23 @@ export function familyWeight(family, weights) {
   return num(family.adults) * num(weights.adult) + num(family.children) * num(weights.child);
 }
 
+/**
+ * 某家在「按權重均分」的某筆費用中佔幾份：
+ * 先看這筆是否直接指定該家份數，再看這筆是否自訂大人／小孩權重，最後才用活動預設權重。
+ */
+export function splitFamilyWeight(family, split, activity) {
+  const o = split.shares?.[family.id];
+  if (o !== undefined && o !== null && String(o).trim() !== '' && Number.isFinite(Number(o))) {
+    return Math.max(0, Number(o));
+  }
+  return familyWeight(family, split.weights ?? activity.weights);
+}
+
+/** 這筆費用是否有自訂權重或份數 */
+export function hasCustomWeights(split) {
+  return split.mode === 'weighted' && (!!split.weights || (!!split.shares && Object.keys(split.shares).length > 0));
+}
+
 /** 一筆費用的總額（所有付款加總，已四捨五入到元） */
 export function expenseTotal(expense) {
   return expense.payments.reduce((s, p) => s + roundYuan(num(p.amount)), 0);
@@ -59,11 +77,12 @@ export function expenseShares(expense, activity) {
   if (expense.split.mode === 'weighted') {
     const members = activity.families.filter((f) => expense.split.participants.includes(f.id));
     if (!members.length) return { shares: {}, error: '沒有選擇分攤的家庭' };
-    const totalWeight = members.reduce((s, f) => s + familyWeight(f, activity.weights), 0);
+    const w = (f) => splitFamilyWeight(f, expense.split, activity);
+    const totalWeight = members.reduce((s, f) => s + w(f), 0);
     if (totalWeight <= 0) return { shares: {}, error: '分攤家庭的權重總和為 0' };
     /** @type {Record<string, number>} */
     const shares = {};
-    for (const f of members) shares[f.id] = (total * familyWeight(f, activity.weights)) / totalWeight;
+    for (const f of members) shares[f.id] = (total * w(f)) / totalWeight;
     return { shares, error: null };
   }
 
