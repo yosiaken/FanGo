@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeSettlement, expenseShares, roundYuan } from '../js/calc.js';
-import { minimizeTransfers } from '../js/settle.js';
-import { buildReport } from '../js/report.js';
+import { computeSettlement, expenseShares, roundYuan } from '../public/js/calc.js';
+import { minimizeTransfers } from '../public/js/settle.js';
+import { buildReport } from '../public/js/report.js';
 
 const families = [
   { id: 'A', name: '小明家', adults: 2, children: 1 },
@@ -103,7 +103,7 @@ test('有錯誤的費用整筆排除，帳仍平衡', () => {
 });
 
 test('金額算式解析', async () => {
-  const { parseAmount } = await import('../js/calc.js');
+  const { parseAmount } = await import('../public/js/calc.js');
   assert.equal(parseAmount('1,200+350'), 1550);
   assert.equal(parseAmount('500*3'), 1500);
   assert.equal(parseAmount('500x3'), 1500);

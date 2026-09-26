@@ -6,6 +6,7 @@
   "description": "分好帳 FanGo — 多家庭出遊分帳工具（純前端、免建置）",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "serve": "npx --yes serve ."
+    "serve": "npx --yes serve public",
+    "deploy": "npx wrangler deploy"
   }
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { minimizeTransfers } from '../js/settle.js';
+import { minimizeTransfers } from '../public/js/settle.js';
 
 function check(nets) {
   const balances = nets.map((net, i) => ({ id: 'F' + i, net }));

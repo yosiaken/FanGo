@@ -24,20 +24,21 @@
 - 四捨五入後與總支出的差額，全部由「尾差吸收」那一家承擔，確保淨額加總恰為 0
 - 資料有誤的費用（例如指定金額加總不符）整筆不列入計算，並在畫面上提示
 
-## 部署到 Cloudflare Pages
+## 部署到 Cloudflare
 
-這是純靜態網站，不需要 build：
+網站檔案都在 `public/`，是純靜態網站，不需要 build。
 
-1. Cloudflare Dashboard → Workers & Pages → Create → Pages → 連接此 GitHub repo
-2. Framework preset：**None**；Build command：**留空**；Build output directory：**`/`**
-3. 儲存並部署
+**Workers（連接 GitHub）**：repo 已附 `wrangler.jsonc`（assets 目錄 = `./public`），
+Deploy command 用預設的 `npx wrangler deploy` 即可，Build command 留空。
 
-也可以用 Wrangler：`npx wrangler pages deploy . --project-name fango`
+**Pages**：Framework preset 選 None、Build command 留空、Build output directory 填 `public`。
+
+手動部署：`npm run deploy`（= `npx wrangler deploy`）
 
 ## 本機開發
 
 ```bash
-npm run serve   # 或 python3 -m http.server，然後開 http://localhost:8000
+npm run serve   # 或 cd public && python3 -m http.server，然後開 http://localhost:8000
 npm test        # 計算邏輯單元測試（Node 內建 test runner，無需安裝套件）
 ```
 
@@ -46,12 +47,14 @@ npm test        # 計算邏輯單元測試（Node 內建 test runner，無需安
 ## 檔案結構
 
 ```
-index.html            頁面外框
-css/style.css         樣式（含深色模式）
-js/calc.js            分帳計算核心
-js/settle.js          最少轉帳演算法
-js/report.js          LINE 文字輸出
-js/store.js           localStorage、分享連結
-js/app.js             介面
+public/               部署的靜態檔案
+  index.html          頁面外框
+  css/style.css       樣式（含深色模式）
+  js/calc.js          分帳計算核心
+  js/settle.js        最少轉帳演算法
+  js/report.js        LINE 文字輸出
+  js/store.js         localStorage、分享連結
+  js/app.js           介面
 tests/                單元測試
+wrangler.jsonc        Cloudflare 部署設定
 ```
