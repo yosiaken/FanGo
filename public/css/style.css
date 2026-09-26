@@ -268,3 +268,16 @@ table.detail tfoot td { font-weight: 800; border-bottom: 0; }
   .brand small { display: none; }
   .split-row .money { width: 110px; }
 }
+
+/* 金額欄的運算鍵列（手機數字鍵盤沒有運算符號） */
+.calc-bar {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px;
+  margin: 0 0 10px; padding: 6px; background: var(--surface-2); border-radius: 10px;
+}
+.calc-bar button {
+  min-height: 40px; border: 1px solid var(--border); background: var(--surface); border-radius: 8px;
+  font-size: 18px; font-weight: 700; cursor: pointer; touch-action: manipulation; user-select: none; -webkit-user-select: none;
+}
+.calc-bar button:active { background: var(--accent-soft); }
+.calc-bar button[data-calc="="] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.split-list .calc-bar { margin-top: 2px; }

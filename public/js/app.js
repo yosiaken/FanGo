@@ -431,13 +431,63 @@ function onDialogInput(ev) {
   refreshDialogDerived();
 }
 
-/** 離開金額欄位時，把算式換成計算結果 */
-function onDialogBlur(ev) {
-  const el = ev.target;
-  if (el.dataset.d !== 'pay-amt' && el.dataset.d !== 'fixed') return;
+const isMoneyInput = (el) => el?.dataset?.d === 'pay-amt' || el?.dataset?.d === 'fixed';
+
+/** 把金額欄的算式換成計算結果（純數字則不動） */
+function evaluateInPlace(el) {
+  const raw = el.value.replace(/,/g, '').trim();
+  if (/^-?\d*\.?\d*$/.test(raw)) return;
   const v = parseAmount(el.value);
-  if (v === null || !/[+*/()]|.-/.test(el.value.replace(/,/g, '').trim())) return;
+  if (v === null) return;
   el.value = String(roundYuan(v));
+  onDialogInput({ target: el });
+}
+
+/** 離開金額欄位時，把算式換成計算結果並收起運算鍵 */
+function onDialogBlur(ev) {
+  if (!isMoneyInput(ev.target)) return;
+  evaluateInPlace(ev.target);
+  $('#calc-bar')?.remove();
+}
+
+// ---- 運算鍵列：手機數字鍵盤沒有 + − × ÷，聚焦金額欄時在下方補一排 ----
+const CALC_KEYS = [
+  ['+', '+'], ['−', '-'], ['×', '×'], ['÷', '÷'], ['(', '('], [')', ')'], ['=', '='],
+];
+
+function onDialogFocusIn(ev) {
+  const el = ev.target;
+  if (!isMoneyInput(el)) return;
+  let bar = $('#calc-bar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'calc-bar';
+    bar.className = 'calc-bar';
+    bar.setAttribute('role', 'toolbar');
+    bar.setAttribute('aria-label', '運算符號');
+    bar.innerHTML = CALC_KEYS.map(([label, v]) => `<button type="button" tabindex="-1" data-calc="${esc(v)}" aria-label="${label === '=' ? '計算' : label}">${label}</button>`).join('');
+    // 用 pointerdown 處理並阻止預設行為，焦點留在輸入框，鍵盤不會收起
+    const keep = (e) => e.preventDefault();
+    bar.addEventListener('mousedown', keep);
+    bar.addEventListener('touchstart', keep, { passive: false });
+    bar.addEventListener('click', keep);
+    bar.addEventListener('pointerdown', (e) => {
+      const b = e.target.closest('[data-calc]');
+      e.preventDefault();
+      if (b && bar.target) pressCalcKey(bar.target, b.dataset.calc);
+    });
+  }
+  bar.target = el;
+  const row = el.closest('.pay-row, .split-row');
+  if (row && row.nextElementSibling !== bar) row.after(bar);
+}
+
+function pressCalcKey(el, key) {
+  el.focus();
+  if (key === '=') return evaluateInPlace(el);
+  const start = el.selectionStart ?? el.value.length;
+  const end = el.selectionEnd ?? el.value.length;
+  el.setRangeText(key, start, end, 'end');
   onDialogInput({ target: el });
 }
 
@@ -744,6 +794,7 @@ function bindEvents() {
   dlg.addEventListener('input', onDialogInput);
   dlg.addEventListener('change', onDialogInput);
   dlg.addEventListener('focusout', onDialogBlur);
+  dlg.addEventListener('focusin', onDialogFocusIn);
   dlg.addEventListener('click', onDialogClick);
   dlg.addEventListener('submit', onDialogSubmit);
   dlg.addEventListener('close', () => (draft = null));
