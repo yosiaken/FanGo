@@ -252,6 +252,162 @@ function renderGroupDialog() {
   </form>`;
 }
 
+// ---------------- 新增活動／從其他活動沿用家庭 ----------------
+/** mode: 'new' 建立新活動（可沿用家庭）；'import' 把其他活動的家庭加入目前活動 */
+let famDlg = null;
+
+/** 可以沿用家庭的活動（最近更新的在前） */
+function familySources(mode) {
+  return state.activities
+    .filter((x) => x.families.length && !(mode === 'import' && x.id === cur().id))
+    .sort((x, y) => (y.updatedAt ?? 0) - (x.updatedAt ?? 0));
+}
+
+function selectSource(id) {
+  famDlg.sourceId = id;
+  const src = state.activities.find((x) => x.id === id);
+  const existing = new Set(famDlg.mode === 'import' ? cur().families.map((f) => f.name.trim()) : []);
+  famDlg.selected = new Set((src?.families ?? []).filter((f) => !existing.has(f.name.trim())).map((f) => f.id));
+}
+
+function openFamilyDialog(mode) {
+  const sources = familySources(mode);
+  famDlg = { mode, name: '', sourceId: '', selected: new Set() };
+  if (sources[0]) selectSource(sources[0].id);
+  renderFamilyDialog();
+  const dlg = $('#family-dialog');
+  if (!dlg.open) dlg.showModal();
+  if (mode === 'new') setTimeout(() => $('[data-f="name"]', dlg)?.focus(), 50);
+}
+
+function renderFamilyDialog() {
+  const dlg = $('#family-dialog');
+  const sources = familySources(famDlg.mode);
+  const src = state.activities.find((x) => x.id === famDlg.sourceId);
+  const existing = new Set(famDlg.mode === 'import' ? cur().families.map((f) => f.name.trim()) : []);
+  const isNew = famDlg.mode === 'new';
+  dlg.innerHTML = `
+  <form class="dlg" method="dialog" novalidate>
+    <div class="dlg-head">
+      <h3>${isNew ? '新增活動' : '從其他活動加入家庭'}</h3>
+      <button type="button" class="x" style="width:36px;height:36px" data-f-action="close" aria-label="關閉">×</button>
+    </div>
+    <div class="dlg-body">
+      ${isNew ? `<label class="field"><span>活動名稱</span>
+        <input type="text" data-f="name" value="${esc(famDlg.name)}" placeholder="例如：2026 花蓮三天兩夜" maxlength="60" /></label>` : ''}
+      ${sources.length ? `
+      <label class="field"><span>${isNew ? '沿用哪一趟的家庭' : '從哪一趟加入'}</span>
+        <select data-f="source">
+          ${isNew ? `<option value="" ${!famDlg.sourceId ? 'selected' : ''}>不沿用，從空白開始</option>` : ''}
+          ${sources.map((x) => `<option value="${esc(x.id)}" ${x.id === famDlg.sourceId ? 'selected' : ''}>${x.cloud ? '☁️ ' : ''}${esc(x.name || '未命名活動')}（${x.families.length} 家）</option>`).join('')}
+        </select></label>` : ''}
+      ${src ? `
+      <div class="card" style="padding:12px">
+        <div class="row" style="margin-bottom:4px">
+          <span class="hint grow">勾選這次有參加的家庭</span>
+          <button type="button" class="btn small ghost" data-f-action="all">全選</button>
+          <button type="button" class="btn small ghost" data-f-action="none">全不選</button>
+        </div>
+        <div class="split-list">
+          ${src.families.map((f) => `
+            <div class="split-row">
+              <label>
+                <input type="checkbox" data-f="fam" data-id="${esc(f.id)}" ${famDlg.selected.has(f.id) ? 'checked' : ''} />
+                <span class="who">${esc(f.name || '未命名')}<small>${people(f)}${existing.has(f.name.trim()) ? ' · 目前活動已有同名家庭' : ''}</small></span>
+              </label>
+            </div>`).join('')}
+        </div>
+        <p class="hint" style="margin:8px 0 0">大人、小孩人數${isNew ? '和分攤權重' : ''}會一起帶入，之後可以在家庭設定修改。</p>
+      </div>` : isNew ? '' : '<p class="hint">沒有其他活動可以沿用。</p>'}
+    </div>
+    <div class="dlg-foot">
+      <span class="grow"></span>
+      <button type="button" class="btn" data-f-action="close">取消</button>
+      <button type="submit" class="btn primary">${isNew ? '建立' : `加入 ${famDlg.selected.size} 家`}</button>
+    </div>
+  </form>`;
+}
+
+/** 複製家庭（給新的 id，避免不同活動之間互相影響） */
+function copyFamilies(src, selected) {
+  const idMap = {};
+  const families = src.families
+    .filter((f) => selected.has(f.id))
+    .map((f) => {
+      idMap[f.id] = uid();
+      return { id: idMap[f.id], name: f.name, adults: num(f.adults), children: num(f.children) };
+    });
+  return { families, idMap };
+}
+
+async function submitFamilyDialog() {
+  const src = state.activities.find((x) => x.id === famDlg.sourceId);
+  const dlg = $('#family-dialog');
+  if (famDlg.mode === 'import') {
+    if (!src || !famDlg.selected.size) return toast('請至少勾選一家');
+    const a = cur();
+    const { families } = copyFamilies(src, famDlg.selected);
+    a.families.push(...families);
+    if (!a.families.some((f) => f.id === a.roundingFamilyId)) a.roundingFamilyId = a.families[0]?.id ?? null;
+    dlg.close();
+    persist();
+    renderView();
+    toast(`已加入 ${families.length} 家`);
+    return;
+  }
+
+  let n = newActivity(famDlg.name.trim() || '新活動');
+  if (src && famDlg.selected.size) {
+    const { families, idMap } = copyFamilies(src, famDlg.selected);
+    n.families = families;
+    n.weights = { ...src.weights };
+    n.roundingFamilyId = idMap[src.roundingFamilyId] ?? families[0]?.id ?? null;
+  }
+  dlg.close();
+  // 預設建立在雲端；離線時先存本機，之後可在設定頁上傳
+  try {
+    n = await uploadActivity(n, groupCode());
+    n.updatedAt = Date.now();
+  } catch {
+    toast('目前無法連線，先存在這支手機；之後可在設定頁上傳');
+  }
+  state.activities.push(n);
+  ui.tab = 'setup';
+  writePref('tab', 'setup');
+  switchTo(n.id);
+}
+
+function bindFamilyDialog() {
+  const dlg = $('#family-dialog');
+  dlg.addEventListener('input', (e) => {
+    if (e.target.dataset.f === 'name') famDlg.name = e.target.value;
+  });
+  dlg.addEventListener('change', (e) => {
+    const el = e.target;
+    if (el.dataset.f === 'source') {
+      selectSource(el.value);
+      renderFamilyDialog();
+    } else if (el.dataset.f === 'fam') {
+      if (el.checked) famDlg.selected.add(el.dataset.id);
+      else famDlg.selected.delete(el.dataset.id);
+      if (famDlg.mode === 'import') renderFamilyDialog();
+    }
+  });
+  dlg.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-f-action]');
+    if (!b) return;
+    const src = state.activities.find((x) => x.id === famDlg.sourceId);
+    if (b.dataset.fAction === 'close') return dlg.close();
+    if (b.dataset.fAction === 'all') famDlg.selected = new Set(src?.families.map((f) => f.id) ?? []);
+    if (b.dataset.fAction === 'none') famDlg.selected = new Set();
+    renderFamilyDialog();
+  });
+  dlg.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitFamilyDialog();
+  });
+}
+
 function bindGroupDialog() {
   const dlg = $('#group-dialog');
   dlg.addEventListener('submit', async (e) => {
@@ -380,7 +536,10 @@ function setupHTML(a) {
   <section class="card">
     <h2>參加家庭 <span class="hint" id="fam-summary">${a.families.length} 家 · ${totalA} 大 ${totalC} 小</span></h2>
     ${a.families.length ? a.families.map((f) => familyRowHTML(a, f)).join('') : '<p class="empty" style="padding:8px">還沒有家庭，先新增參加的家庭吧！</p>'}
-    <button class="btn block" data-action="add-family" style="margin-top:8px">＋ 新增家庭</button>
+    <div class="row" style="margin-top:8px">
+      <button class="btn grow" data-action="add-family">＋ 新增家庭</button>
+      ${familySources('import').length ? '<button class="btn grow" data-action="import-families">從其他活動加入</button>' : ''}
+    </div>
   </section>
 
   <section class="card">
@@ -1244,6 +1403,9 @@ function viewAction(action, b) {
       writePref('resultView', ui.resultView);
       renderView();
       break;
+    case 'import-families':
+      openFamilyDialog('import');
+      break;
     case 'upload':
       uploadCurrent();
       break;
@@ -1272,23 +1434,9 @@ function viewAction(action, b) {
 async function menuAction(action) {
   const a = cur();
   switch (action) {
-    case 'new-activity': {
-      const name = prompt('活動名稱', '新活動');
-      if (name === null) return;
-      let n = newActivity(name.trim() || '新活動');
-      // 預設建立在雲端；離線時先存本機，之後可在設定頁上傳
-      try {
-        n = await uploadActivity(n, groupCode());
-        n.updatedAt = Date.now();
-      } catch {
-        toast('目前無法連線，先存在這支手機；之後可在設定頁上傳');
-      }
-      state.activities.push(n);
-      ui.tab = 'setup';
-      writePref('tab', 'setup');
-      switchTo(n.id);
+    case 'new-activity':
+      openFamilyDialog('new');
       break;
-    }
     case 'group':
       openGroupDialog();
       break;
@@ -1392,6 +1540,7 @@ if (!['setup', 'expenses', 'result'].includes(ui.tab)) ui.tab = 'setup';
 if (!cur().families.length) ui.tab = 'setup';
 bindEvents();
 bindGroupDialog();
+bindFamilyDialog();
 renderAll();
 importFromHash().then(() => {
   syncer.start();
