@@ -292,3 +292,20 @@ table.detail tfoot td { font-weight: 800; border-bottom: 0; }
 .share-in input { width: 56px; min-height: 38px; padding: 6px; text-align: center; }
 .share-in input.overridden { border-color: var(--accent); background: var(--accent-soft); color: var(--text); font-weight: 700; }
 .share-in input:disabled { opacity: 0.4; }
+
+/* 雲端同步 */
+.sync-bar {
+  max-width: 760px; margin: 0 auto 8px; padding: 0 16px;
+  display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted);
+}
+.sync-bar[hidden] { display: none; }
+.sync-bar > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-bar button { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; flex: none; }
+.sync-bar.ok > span { color: var(--pos); }
+.sync-bar.warn > span { color: var(--warn-ink); }
+.sync-bar.bad > span { color: var(--danger); }
+.cloud-card input[readonly] { font-size: 13px; color: var(--muted); }
+.trip-list { margin-top: 12px; }
+.trip-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border); }
+.trip-row:first-child { border-top: 0; }
+.trip-row small { display: block; font-size: 12px; }

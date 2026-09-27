@@ -19,8 +19,9 @@
       <button class="icon-btn" id="menu-btn" aria-label="選單" aria-haspopup="true">⋯</button>
       <div class="menu" id="menu" hidden>
         <button data-action="new-activity">＋ 新增活動</button>
+        <button data-action="group">👥 群組代碼（找回所有出遊）</button>
         <button data-action="load-sample">載入範例資料</button>
-        <button data-action="share-link">產生分享連結</button>
+        <button data-action="share-link">複製分享連結</button>
         <button data-action="export">匯出備份（JSON）</button>
         <button data-action="import">匯入備份</button>
         <hr />
@@ -34,9 +35,12 @@
       <button role="tab" data-tab="result">③ 結算</button>
     </nav>
 
+    <div id="sync-bar" class="sync-bar" role="status" aria-live="polite" hidden></div>
+
     <main id="view"></main>
 
     <dialog id="expense-dialog"></dialog>
+    <dialog id="group-dialog"></dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <input type="file" id="import-file" accept="application/json,.json" hidden />
     <noscript><p style="padding:16px">請開啟 JavaScript 才能使用分好帳。</p></noscript>

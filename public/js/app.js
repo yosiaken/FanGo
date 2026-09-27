@@ -6,6 +6,7 @@ import {
 import { minimizeTransfers } from './settle.js';
 import { buildReport } from './report.js';
 import { decodeShare, encodeShare, load, newActivity, normalizeActivity, save, uid } from './store.js';
+import { createSyncer, deleteTrip, fetchTrip, lookupGroup, setTripGroup, uploadActivity } from './sync.js';
 
 // ---------------- 狀態 ----------------
 const state = load();
@@ -39,6 +40,244 @@ function cur() {
 function persist() {
   cur().updatedAt = Date.now();
   if (!save(state)) toast('⚠️ 無法儲存到本機（可能是私密瀏覽模式）');
+  if (cur().cloud) syncer.request();
+}
+
+// ---------------- 雲端同步 ----------------
+const groupCode = () => readPref('group', '');
+const tripLink = (id) => `${location.origin}${location.pathname}#t=${id}`;
+let syncStatus = { state: 'local' };
+
+const syncer = createSyncer({
+  getCurrent: () => cur(),
+  getAll: () => state.activities,
+  save: () => save(state),
+  onChange: (a) => {
+    if (a === cur()) renderAfterRemote();
+  },
+  onStatus: (st) => {
+    syncStatus = st;
+    const a = cur();
+    if (a.cloud) a.cloud.gone = st.state === 'gone';
+    renderSyncBar();
+  },
+  onConflict: async ({ kind, local, remote }) => {
+    const desc = (e) => (e ? `「${e.name || '未命名'}」${money(expenseTotal(e))}，${e.payments.map((p) => famName(cur(), p.familyId)).join('、')}付` : '（已刪除）');
+    if (kind === 'delete') {
+      return confirm(`你刪除的費用剛被其他人修改：\n${desc(remote)}\n\n確定＝仍要刪除\n取消＝保留對方修改後的版本`) ? 'mine' : 'theirs';
+    }
+    return confirm(
+      `這筆費用剛被其他人${remote ? '修改' : '刪除'}。\n\n你的版本：${desc(local)}\n對方的版本：${desc(remote)}\n\n確定＝保留你的版本\n取消＝改用對方的版本`,
+    ) ? 'mine' : 'theirs';
+  },
+});
+
+/** 別人的修改進來時更新畫面；正在輸入時先不重畫，避免游標跳掉 */
+let renderPending = false;
+function renderAfterRemote() {
+  const el = document.activeElement;
+  if (el && $('#view').contains(el) && /^(INPUT|SELECT)$/.test(el.tagName)) {
+    renderPending = true;
+    return;
+  }
+  renderActivitySelect();
+  renderView();
+}
+
+function renderSyncBar() {
+  const bar = $('#sync-bar');
+  const a = cur();
+  if (!a.cloud) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  const time = (t) => new Date(t).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+  const map = {
+    syncing: ['sync', '同步中…'],
+    synced: ['ok', `已同步${syncStatus.at ? ' · ' + time(syncStatus.at) : ''}`],
+    pending: ['warn', '有修改尚未上傳，稍後自動重試'],
+    offline: ['warn', '目前離線，修改會先存在手機，連線後自動上傳'],
+    error: ['bad', `同步失敗：${syncStatus.error ?? ''}`],
+    gone: ['bad', '這趟已從雲端刪除'],
+    local: ['sync', '準備同步…'],
+  };
+  const [cls, text] = map[syncStatus.state] ?? map.local;
+  bar.className = `sync-bar ${cls}`;
+  bar.innerHTML = `<span>☁️ ${esc(text)}</span>${
+    syncStatus.state === 'gone'
+      ? '<button type="button" data-action="make-local">改為只存本機</button>'
+      : '<button type="button" data-action="sync-now">立即同步</button>'
+  }`;
+}
+
+/** 切換到某趟時更新網址（雲端出遊顯示 #t=，方便直接複製網址分享） */
+function syncHash() {
+  const a = cur();
+  const want = a.cloud ? `#t=${a.id}` : '';
+  if (location.hash !== want) history.replaceState(null, '', location.pathname + location.search + want);
+}
+
+function switchTo(id) {
+  state.currentId = id;
+  save(state);
+  syncStatus = { state: 'local' };
+  syncHash();
+  renderAll();
+  syncer.now();
+}
+
+/** 開啟雲端出遊（連結或群組清單），本機沒有就下載 */
+async function openCloudTrip(id) {
+  const existing = state.activities.find((x) => x.id === id);
+  if (existing) return switchTo(id);
+  toast('下載中…');
+  try {
+    const a = await fetchTrip(id);
+    state.activities.push(a);
+    if (!a.families.length) ui.tab = 'setup';
+    switchTo(a.id);
+    toast(`已開啟「${a.name || '未命名活動'}」`);
+  } catch (e) {
+    toast(e.status === 404 ? '找不到這趟出遊（可能已被刪除）' : `無法開啟：${e.message}`);
+  }
+}
+
+/** 本機活動上傳成雲端出遊 */
+async function uploadCurrent() {
+  const a = cur();
+  if (a.cloud) return;
+  try {
+    const cloud = await uploadActivity(a, groupCode());
+    cloud.updatedAt = Date.now();
+    const idx = state.activities.indexOf(a);
+    state.activities[idx] = cloud;
+    switchTo(cloud.id);
+    toast('已上傳，把連結分享給同行的人吧！');
+  } catch (e) {
+    toast(`上傳失敗：${e.message}`);
+  }
+}
+
+function cloudCardHTML(a) {
+  if (!a.cloud) {
+    return `
+    <section class="card cloud-card">
+      <h2>☁️ 雲端同步 <span class="hint">未開啟</span></h2>
+      <p class="hint" style="margin:0 0 10px">目前只存在這支手機。上傳後會產生共用連結，同行的人都能一起新增、修改費用。</p>
+      <button class="btn primary block" data-action="upload">上傳到雲端，開始多人共用</button>
+    </section>`;
+  }
+  const link = tripLink(a.id);
+  const code = groupCode();
+  const group = a.cloud.hasGroup
+    ? `<span class="pos">✓ 已加入群組</span>${code ? '' : ' <span class="hint">（這支手機尚未設定群組代碼）</span>'}`
+    : code
+      ? `<button class="btn small" data-action="join-group">加入我的群組</button>`
+      : `<button class="btn small ghost" data-action="open-group">設定群組代碼</button>`;
+  return `
+  <section class="card cloud-card">
+    <h2>☁️ 雲端同步 <span class="hint pos">已開啟</span></h2>
+    <p class="hint" style="margin:0 0 8px">把連結傳給同行的人，大家打開就能一起記帳：</p>
+    <div class="row">
+      <input type="text" class="grow num" value="${esc(link)}" readonly aria-label="共用連結" data-select-all />
+      <button class="btn" data-action="copy-link">複製</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <a class="btn small ghost" href="https://line.me/R/share?text=${encodeURIComponent(`分好帳「${a.name}」一起記帳：${link}`)}" target="_blank" rel="noopener">分享到 LINE</a>
+      <span class="grow"></span>
+      <span class="hint">群組：</span>${group}
+    </div>
+  </section>`;
+}
+
+// ---------------- 群組代碼 ----------------
+let groupTrips = null;
+
+async function openGroupDialog() {
+  const dlg = $('#group-dialog');
+  groupTrips = null;
+  renderGroupDialog();
+  if (!dlg.open) dlg.showModal();
+  if (groupCode()) await refreshGroup();
+}
+
+async function refreshGroup() {
+  const code = groupCode();
+  if (!code) return;
+  groupTrips = 'loading';
+  renderGroupDialog();
+  try {
+    groupTrips = (await lookupGroup(code)).trips;
+  } catch (e) {
+    groupTrips = { error: e.message };
+  }
+  renderGroupDialog();
+}
+
+function renderGroupDialog() {
+  const code = groupCode();
+  const known = new Set(state.activities.map((x) => x.id));
+  let list = '';
+  if (groupTrips === 'loading') list = '<p class="hint">查詢中…</p>';
+  else if (groupTrips?.error) list = `<p class="neg">查詢失敗：${esc(groupTrips.error)}</p>`;
+  else if (Array.isArray(groupTrips)) {
+    list = groupTrips.length
+      ? groupTrips.map((t) => `
+        <div class="trip-row">
+          <div class="grow"><b>${esc(t.name || '未命名活動')}</b><small class="hint">更新於 ${new Date(t.updatedAt).toLocaleDateString('zh-TW')}</small></div>
+          <button type="button" class="btn small ${known.has(t.id) ? 'ghost' : 'primary'}" data-g-action="open" data-id="${esc(t.id)}">${t.id === cur().id ? '目前這趟' : known.has(t.id) ? '切換' : '開啟'}</button>
+        </div>`).join('')
+      : '<p class="hint">這個群組還沒有出遊紀錄。在設定頁按「加入我的群組」，或設定代碼後新增的出遊會自動加入。</p>';
+  }
+  $('#group-dialog').innerHTML = `
+  <form class="dlg" method="dialog" novalidate>
+    <div class="dlg-head">
+      <h3>群組代碼</h3>
+      <button type="button" class="x" style="width:36px;height:36px" data-g-action="close" aria-label="關閉">×</button>
+    </div>
+    <div class="dlg-body">
+      <p class="hint" style="margin-top:0">同一群朋友用同一個代碼，就能在任何裝置找回所有出遊紀錄。代碼就像鑰匙，知道的人都能看到、修改，請取不容易被猜到的（不分大小寫）。</p>
+      <div class="row">
+        <input type="text" class="grow" data-g="code" value="${esc(code)}" placeholder="例如：mengfamily-2026" maxlength="64" autocomplete="off" autocapitalize="off" />
+        <button type="submit" class="btn primary">查詢</button>
+      </div>
+      <div class="trip-list">${list}</div>
+    </div>
+    <div class="dlg-foot">
+      ${code ? '<button type="button" class="btn ghost danger" data-g-action="clear">清除這支手機的代碼</button>' : ''}
+      <span class="grow"></span>
+      <button type="button" class="btn" data-g-action="close">關閉</button>
+    </div>
+  </form>`;
+}
+
+function bindGroupDialog() {
+  const dlg = $('#group-dialog');
+  dlg.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const code = $('[data-g="code"]', dlg).value.trim();
+    if (code.length < 4) return toast('群組代碼至少 4 個字元');
+    writePref('group', code);
+    await refreshGroup();
+    if (ui.tab === 'setup') renderView();
+  });
+  dlg.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-g-action]');
+    if (!b) return;
+    const act = b.dataset.gAction;
+    if (act === 'close') dlg.close();
+    else if (act === 'clear') {
+      if (!confirm('清除這支手機記住的群組代碼？（雲端資料不受影響）')) return;
+      writePref('group', '');
+      groupTrips = null;
+      renderGroupDialog();
+      if (ui.tab === 'setup') renderView();
+    } else if (act === 'open') {
+      dlg.close();
+      await openCloudTrip(b.dataset.id);
+    }
+  });
 }
 
 // ---------------- 工具 ----------------
@@ -83,6 +322,7 @@ function renderAll() {
   renderActivitySelect();
   renderTabs();
   renderView();
+  renderSyncBar();
 }
 
 function renderActivitySelect() {
@@ -90,7 +330,7 @@ function renderActivitySelect() {
   $('#activity-select').innerHTML = state.activities
     .slice()
     .sort((x, y) => (y.updatedAt ?? 0) - (x.updatedAt ?? 0))
-    .map((x) => `<option value="${esc(x.id)}" ${x.id === a.id ? 'selected' : ''}>${esc(x.name || '未命名活動')}</option>`)
+    .map((x) => `<option value="${esc(x.id)}" ${x.id === a.id ? 'selected' : ''}>${x.cloud ? '☁️ ' : ''}${esc(x.name || '未命名活動')}</option>`)
     .join('');
 }
 
@@ -119,6 +359,7 @@ function setupHTML(a) {
   const totalA = a.families.reduce((s, f) => s + num(f.adults), 0);
   const totalC = a.families.reduce((s, f) => s + num(f.children), 0);
   return `
+  ${cloudCardHTML(a)}
   <section class="card">
     <h2>活動</h2>
     <label class="field" style="margin:0"><span>活動名稱</span>
@@ -206,7 +447,11 @@ function expensesHTML(a) {
     return `<div class="card empty">要先設定參加的家庭，才能記錄費用。<br /><button class="btn primary" data-tab-go="setup">前往家庭設定</button></div>`;
   }
   const valid = computeSettlement(a);
-  const list = a.expenses.map((e) => expenseCardHTML(a, e)).join('');
+  const list = a.expenses
+    .map((e, i) => [e, i])
+    .sort(([x, i], [y, j]) => (x.createdAt ?? 0) - (y.createdAt ?? 0) || i - j)
+    .map(([e]) => expenseCardHTML(a, e))
+    .join('');
   return `
   <div class="summary-bar">
     <span class="hint">共 ${a.expenses.length} 筆${valid.issues.length ? ` · <span class="neg">${valid.issues.length} 筆有誤</span>` : ''}</span>
@@ -285,7 +530,11 @@ function openExpense(id) {
   renderDialog();
   const dlg = $('#expense-dialog');
   if (!dlg.open) dlg.showModal();
-  if (!e) setTimeout(() => $('[data-d="name"]', dlg)?.focus(), 50);
+  // 新增時自動聚焦名稱欄；若使用者已先點了其他欄位就不搶焦點
+  if (!e) setTimeout(() => {
+    const act = document.activeElement;
+    if (!act || act === dlg || act === document.body || !dlg.contains(act)) $('[data-d="name"]', dlg)?.focus();
+  }, 50);
 }
 
 const weightStrings = (w) => ({ adult: String(w.adult), child: String(w.child) });
@@ -682,8 +931,11 @@ function onDialogSubmit(ev) {
     split = { mode: 'fixed', amounts };
   }
 
+  const prev = draft.id ? a.expenses.find((e) => e.id === draft.id) : null;
   const expense = {
     id: draft.id ?? uid(),
+    // 舊資料沒有 createdAt：編輯時維持沒有，避免排序跳到最後
+    ...(prev ? (prev.createdAt ? { createdAt: prev.createdAt } : {}) : { createdAt: Date.now() }),
     name: draft.name.trim() || CATEGORY_LABEL[draft.category],
     category: draft.category,
     payments,
@@ -813,10 +1065,18 @@ function bindEvents() {
     if (b) setTab(b.dataset.tab);
   });
 
-  $('#activity-select').addEventListener('change', (e) => {
-    state.currentId = e.target.value;
-    save(state);
-    renderAll();
+  $('#activity-select').addEventListener('change', (e) => switchTo(e.target.value));
+
+  $('#sync-bar').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-action]');
+    if (!b) return;
+    if (b.dataset.action === 'sync-now') syncer.now();
+    else if (b.dataset.action === 'make-local') {
+      if (!confirm('這趟已從雲端刪除。要把手機上的資料改為只存本機嗎？')) return;
+      delete cur().cloud;
+      save(state);
+      switchTo(cur().id);
+    }
   });
 
   // 選單
@@ -870,6 +1130,19 @@ function bindEvents() {
     viewAction(b.dataset.action, b);
   });
   view.addEventListener('input', onViewInput);
+  view.addEventListener('focusin', (e) => {
+    if (e.target.matches('[data-select-all]')) e.target.select();
+  });
+  view.addEventListener('focusout', () => {
+    if (!renderPending) return;
+    setTimeout(() => {
+      const el = document.activeElement;
+      if (el && view.contains(el) && /^(INPUT|SELECT)$/.test(el.tagName)) return;
+      renderPending = false;
+      renderActivitySelect();
+      renderView();
+    }, 0);
+  });
   view.addEventListener('change', (e) => {
     if (e.target.dataset.action === 'include-expenses') {
       ui.includeExpenses = e.target.checked;
@@ -895,7 +1168,7 @@ function onViewInput(e) {
     a.name = el.value;
     persist();
     const opt = $(`#activity-select option[value="${a.id}"]`);
-    if (opt) opt.textContent = a.name || '未命名活動';
+    if (opt) opt.textContent = (a.cloud ? '☁️ ' : '') + (a.name || '未命名活動');
   } else if (el.dataset.bind === 'w-adult' || el.dataset.bind === 'w-child') {
     const v = parseFloat(el.value);
     if (!Number.isFinite(v) || v < 0) return el.classList.add('invalid');
@@ -971,6 +1244,25 @@ function viewAction(action, b) {
       writePref('resultView', ui.resultView);
       renderView();
       break;
+    case 'upload':
+      uploadCurrent();
+      break;
+    case 'copy-link':
+      copyText(tripLink(a.id)).then((ok) => toast(ok ? '共用連結已複製' : '複製失敗，請手動選取'));
+      break;
+    case 'open-group':
+      openGroupDialog();
+      break;
+    case 'join-group':
+      setTripGroup(a.id, groupCode())
+        .then(() => {
+          a.cloud.hasGroup = true;
+          save(state);
+          renderView();
+          toast('已加入群組');
+        })
+        .catch((e) => toast(`加入失敗：${e.message}`));
+      break;
     case 'copy-report':
       copyText($('#report-text').value).then((ok) => toast(ok ? '已複製，貼到 LINE 群組吧！' : '複製失敗，請手動選取文字'));
       break;
@@ -983,15 +1275,23 @@ async function menuAction(action) {
     case 'new-activity': {
       const name = prompt('活動名稱', '新活動');
       if (name === null) return;
-      const n = newActivity(name.trim() || '新活動');
+      let n = newActivity(name.trim() || '新活動');
+      // 預設建立在雲端；離線時先存本機，之後可在設定頁上傳
+      try {
+        n = await uploadActivity(n, groupCode());
+        n.updatedAt = Date.now();
+      } catch {
+        toast('目前無法連線，先存在這支手機；之後可在設定頁上傳');
+      }
       state.activities.push(n);
-      state.currentId = n.id;
-      persist();
       ui.tab = 'setup';
       writePref('tab', 'setup');
-      renderAll();
+      switchTo(n.id);
       break;
     }
+    case 'group':
+      openGroupDialog();
+      break;
     case 'load-sample': {
       const s = sampleActivity();
       state.activities.push(s);
@@ -1002,12 +1302,21 @@ async function menuAction(action) {
       break;
     }
     case 'delete-activity': {
-      if (!confirm(`確定刪除活動「${a.name}」？此動作無法復原。`)) return;
+      if (a.cloud) {
+        if (!confirm(`從這支手機移除「${a.name}」？`)) return;
+        if (confirm('要不要也從雲端刪除？\n\n確定＝從雲端刪除，所有人都看不到了（無法復原）\n取消＝只從這支手機移除，之後還能用連結或群組代碼找回')) {
+          try {
+            await deleteTrip(a.id);
+          } catch (e) {
+            if (e.status !== 404) return toast(`雲端刪除失敗：${e.message}`);
+          }
+        }
+      } else if (!confirm(`確定刪除活動「${a.name}」？此動作無法復原。`)) return;
       state.activities = state.activities.filter((x) => x.id !== a.id);
       state.currentId = state.activities[0]?.id ?? null;
       cur();
-      persist();
-      renderAll();
+      save(state);
+      switchTo(cur().id);
       toast('已刪除活動');
       break;
     }
@@ -1027,6 +1336,11 @@ async function menuAction(action) {
       $('#import-file').click();
       break;
     case 'share-link': {
+      if (a.cloud) {
+        const ok = await copyText(tripLink(a.id));
+        toast(ok ? '共用連結已複製' : '複製失敗');
+        break;
+      }
       try {
         const code = await encodeShare(a);
         const url = `${location.origin}${location.pathname}#d=${code}`;
@@ -1043,8 +1357,10 @@ async function menuAction(action) {
 
 /** 開啟分享連結時匯入資料 */
 async function importFromHash() {
+  const t = location.hash.match(/^#t=([A-Za-z0-9_-]{6,40})$/);
+  if (t) return openCloudTrip(t[1]);
   const m = location.hash.match(/^#d=([A-Za-z0-9_-]+)$/);
-  if (!m) return;
+  if (!m) return syncHash();
   history.replaceState(null, '', location.pathname + location.search);
   try {
     const a = await decodeShare(m[1]);
@@ -1075,5 +1391,10 @@ cur();
 if (!['setup', 'expenses', 'result'].includes(ui.tab)) ui.tab = 'setup';
 if (!cur().families.length) ui.tab = 'setup';
 bindEvents();
+bindGroupDialog();
 renderAll();
-importFromHash();
+importFromHash().then(() => {
+  syncer.start();
+  syncer.now();
+});
+window.addEventListener('hashchange', importFromHash);

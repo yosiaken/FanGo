@@ -1,8 +1,17 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "fango",
+  "main": "src/worker.js",
   "compatibility_date": "2026-09-25",
+  // 靜態網頁；找不到對應檔案的請求（/api/*）才會交給 Worker
   "assets": {
-    "directory": "./public"
-  }
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  // 雲端同步用的 D1 資料庫。未填 database_id 時，wrangler deploy 會自動建立名為 fango-db 的資料庫。
+  // 若自動建立失敗，請在 Cloudflare 後台建立 D1 後，把 database_id 填在這裡。
+  "d1_databases": [
+    { "binding": "DB", "database_name": "fango-db" }
+  ],
+  "observability": { "enabled": true }
 }

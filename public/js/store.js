@@ -21,7 +21,14 @@ export function load() {
     if (raw) {
       const data = JSON.parse(raw);
       if (Array.isArray(data.activities)) {
-        data.activities = data.activities.map(normalizeActivity).filter(Boolean);
+        data.activities = data.activities
+          .map((raw) => {
+            const a = normalizeActivity(raw);
+            // 雲端同步狀態只保留在本機儲存中（匯入／分享連結不帶，避免誤連到別人的雲端資料）
+            if (a && raw.cloud && typeof raw.cloud === 'object' && raw.cloud.synced) a.cloud = raw.cloud;
+            return a;
+          })
+          .filter(Boolean);
         return data;
       }
     }
@@ -51,6 +58,7 @@ export function normalizeActivity(a) {
   const expenses = Array.isArray(a.expenses)
     ? a.expenses.map((e) => ({
         id: String(e.id ?? uid()),
+        ...(Number.isFinite(e.createdAt) ? { createdAt: e.createdAt } : {}),
         name: String(e.name ?? ''),
         category: ['room', 'meal', 'other'].includes(e.category) ? e.category : 'other',
         payments: Array.isArray(e.payments)
