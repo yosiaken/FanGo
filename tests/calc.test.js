@@ -132,3 +132,24 @@ test('單筆費用可自訂權重與份數', () => {
   e.split.shares = { A: 0, B: 0 };
   assert.match(expenseShares(e, a).error, /為 0/);
 });
+
+test('LINE 文字只列出有發生的費用類別', () => {
+  const a = base();
+  a.expenses = [
+    { id: '1', name: '晚餐', category: 'meal', payments: [pay('A', 900)],
+      split: { mode: 'weighted', participants: ['A', 'B', 'C', 'D'] } },
+  ];
+  const r = computeSettlement(a);
+  const text = buildReport(a, r, minimizeTransfers(r.rows));
+  assert.match(text, /餐費 250/);
+  assert.doesNotMatch(text, /房費/);
+  assert.doesNotMatch(text, /其他/);
+
+  // 有「其他」時，沒分到的家庭也顯示 0，方便對照
+  a.expenses.push({ id: '2', name: '門票', category: 'other', payments: [pay('B', 300)],
+    split: { mode: 'weighted', participants: ['B'] } });
+  const r2 = computeSettlement(a);
+  const t2 = buildReport(a, r2, minimizeTransfers(r2.rows));
+  assert.equal((t2.match(/其他 /g) ?? []).length, 4);
+  assert.doesNotMatch(t2, /房費/);
+});

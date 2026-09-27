@@ -1,5 +1,5 @@
 // 產生可貼到 LINE 群組的純文字結算
-import { CATEGORY_LABEL, expenseTotal, fmt, fmtSigned } from './calc.js';
+import { CATEGORIES, CATEGORY_LABEL, expenseTotal, fmt, fmtSigned } from './calc.js';
 
 /**
  * @param {import('./calc.js').Activity} activity
@@ -27,14 +27,15 @@ export function buildReport(activity, result, transfers, opts = {}) {
     lines.push(hr);
   }
 
+  // 只列出這次活動有發生的類別（例如沒有房費就不顯示「房費 0」）
+  const usedCategories = CATEGORIES.filter((c) => result.rows.some((r) => r.byCategory[c] !== 0));
   lines.push('🏠 各家明細');
   for (const r of result.rows) {
     const people = `${r.adults}大${r.children ? r.children + '小' : ''}`;
     lines.push(`▸ ${r.name}（${people}）`);
-    const parts = [`房費 ${fmt(r.byCategory.room)}`, `餐費 ${fmt(r.byCategory.meal)}`];
-    if (r.byCategory.other) parts.push(`其他 ${fmt(r.byCategory.other)}`);
+    const parts = usedCategories.map((c) => `${CATEGORY_LABEL[c]} ${fmt(r.byCategory[c])}`);
     if (r.rounding) parts.push(`尾差 ${fmtSigned(r.rounding)}`);
-    lines.push(`  ${parts.join('｜')}`);
+    if (parts.length) lines.push(`  ${parts.join('｜')}`);
     lines.push(`  應付 ${fmt(r.owed)}｜已代墊 ${fmt(r.paid)}`);
     const verdict = r.net > 0 ? `可拿回 $${fmt(r.net)}` : r.net < 0 ? `需補 $${fmt(-r.net)}` : '剛好打平';
     lines.push(`  👉 ${verdict}`);
